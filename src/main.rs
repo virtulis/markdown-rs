@@ -12,6 +12,8 @@ mod preview;
 #[macro_use]
 mod utils;
 
+use std::borrow::Borrow;
+use std::cell::{Cell, RefCell};
 use gio::prelude::*;
 use gtk::Builder;
 use gtk::functions::show_uri_on_window;
@@ -20,6 +22,8 @@ use gtk::prelude::*;
 use webkit2gtk::*;
 
 use std::env::args;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use preview::Preview;
@@ -81,6 +85,9 @@ fn build_ui(application: &gtk::Application) {
     let markdown_view: gtk::ScrolledWindow = builder.get_object("scrolled_window_right").unwrap();
     markdown_view.add(&web_view);
 
+    let current_file: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+    let changed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
     let file_open: gtk::FileChooserDialog = builder.get_object("file_open").unwrap();
     file_open.add_buttons(&[("Open", gtk::ResponseType::Ok.into()), ("Cancel", gtk::ResponseType::Cancel.into())]);
 
@@ -94,9 +101,14 @@ fn build_ui(application: &gtk::Application) {
     about_dialog.set_comments(Some(DESCRIPTION));
 
     let preview = Preview::new();
-    text_buffer.connect_changed(clone!(web_view, preview => move |buffer| {
+    text_buffer.connect_changed(clone!(web_view, preview, markdown_view, current_file, header_bar => move |buffer| {
+        if !markdown_view.is_visible() { return }
         let markdown = buffer_to_string(buffer);
         web_view.load_html(&preview.render(&markdown), None);
+        let opt: &RefCell<Option<PathBuf>> = current_file.borrow();
+        if let Some(path) = &*opt.borrow() {
+            set_title(&header_bar, path, true);
+        } 
     }));
 
     web_view.connect_decide_policy(clone!(window => move |view, decision, _| {
@@ -109,27 +121,52 @@ fn build_ui(application: &gtk::Application) {
         true
     }));
     web_view.connect_load_failed(move |_, _, _, _| true);
+    
+    let set_current_file = {
+        let current_file = current_file.clone();
+        let changed = changed.clone();
+        let header_bar = header_bar.clone();
+        let text_buffer = text_buffer.clone();
+        move |path: PathBuf| {
+            current_file.replace(Some(path.clone()));
+            text_buffer.set_text(&open_file(&path));
+            changed.set(false);
+            set_title(&header_bar, &path, false);
+        }
+    };
 
-    open_button.connect_clicked(clone!(file_open, header_bar, text_buffer => move |_| {
+    (*application).connect_open(clone!(set_current_file => move |_, files, _| {
+        let file: &gio::File = &files[0];
+        set_current_file((*file).get_path().unwrap());
+    }));
+        
+    open_button.connect_clicked(clone!(set_current_file, file_open => move |_| {
         file_open.show();
         if file_open.run() == gtk::ResponseType::Ok.into() {
             let filename = file_open.get_filename().expect("Couldn't get filename");
-
-            set_title(&header_bar, &filename);
-            text_buffer.set_text(&open_file(&filename));
+            set_current_file(filename);
         }
         file_open.hide();
     }));
 
-    save_button.connect_clicked(clone!(file_save, text_buffer => move |_| {
-        file_save.show();
-        if file_save.run() == gtk::ResponseType::Ok.into() {
-            let filename = file_save.get_filename().expect("Couldn't get filename");
-
-            set_title(&header_bar, &filename);
-            save_file(&filename, &text_buffer);
+    save_button.connect_clicked(clone!(file_save, text_buffer, current_file => move |_| {
+        let opt: &RefCell<Option<PathBuf>> = current_file.borrow();
+        match &*opt.borrow() {
+            Some(path) => {
+                save_file(&path, &text_buffer);
+                set_title(&header_bar, &path, false);
+            },
+            None => {
+                file_save.show();
+                if file_save.run() == gtk::ResponseType::Ok.into() {
+                    let filename = file_save.get_filename().expect("Couldn't get filename");
+                    current_file.replace(Some(filename.clone()));
+                    set_title(&header_bar, &filename, false);
+                    save_file(&filename, &text_buffer);
+                }
+                file_save.hide();                
+            }
         }
-        file_save.hide();
     }));
     
     preview_button.connect_clicked(clone!(markdown_view, preview, web_view, text_buffer => move |_| {
@@ -158,7 +195,7 @@ fn build_ui(application: &gtk::Application) {
 
 fn main() {
     let application =
-        gtk::Application::new(Some("com.github.markdown-rs"), gio::ApplicationFlags::empty())
+        gtk::Application::new(Some("com.github.markdown-rs"), gio::ApplicationFlags::HANDLES_OPEN)
             .expect("Initialization failed...");
 
     application.connect_startup(move |app| {

@@ -6,10 +6,11 @@ use gtk::*;
 use sourceview::*;
 use std::path::PathBuf;
 
-pub fn set_title(header_bar: &HeaderBar, path: &PathBuf) {
+pub fn set_title(header_bar: &HeaderBar, path: &PathBuf, changed: bool) {
     if let Some(file_name) = path.file_name() {
-        let file_name: &str = &file_name.to_string_lossy();
-        header_bar.set_title(Some(file_name));
+        let file_name = &file_name.to_string_lossy();
+        let title = if changed { format!("{} *", file_name) } else { file_name.to_string() };
+        header_bar.set_title(Some(title.as_str()));
 
         if let Some(parent) = path.parent() {
             let subtitle: &str = &parent.to_string_lossy();
@@ -48,6 +49,8 @@ pub fn configure_sourceview(buff: &Buffer) {
     manager
         .get_scheme("classic")
         .map(|theme| buff.set_style_scheme(Some(&theme)));
+    
+    buff.set_max_undo_levels(100);
 }
 
 // http://gtk-rs.org/tuto/closures
