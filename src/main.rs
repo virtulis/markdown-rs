@@ -70,6 +70,7 @@ fn build_ui(application: &gtk::Application) {
 
     let open_button: gtk::ToolButton = builder.get_object("open_button").unwrap();
     let save_button: gtk::ToolButton = builder.get_object("save_button").unwrap();
+    let preview_button: gtk::ToolButton = builder.get_object("preview_button").unwrap();
 
     let text_buffer: sourceview::Buffer = builder.get_object("text_buffer").unwrap();
     configure_sourceview(&text_buffer);
@@ -129,6 +130,15 @@ fn build_ui(application: &gtk::Application) {
             save_file(&filename, &text_buffer);
         }
         file_save.hide();
+    }));
+    
+    preview_button.connect_clicked(clone!(markdown_view, preview, web_view, text_buffer => move |_| {
+        let show = !markdown_view.is_visible();
+        markdown_view.set_visible(show);
+        if show {
+            let markdown = buffer_to_string(&text_buffer);
+            web_view.load_html(&preview.render(&markdown), None);
+        }
     }));
 
     about_dialog.connect_delete_event(move |dialog, _| {
